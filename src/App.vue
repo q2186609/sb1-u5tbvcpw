@@ -1,416 +1,255 @@
 <template>
-  <div class="min-h-screen bg-gray-900 flex items-center justify-center">
-    <div class="text-center">
-      <h1 class="text-4xl font-bold mb-8 text-white">Snake Game</h1>
-      <div v-if="!isPlaying" class="mb-8">
-        <button
-          @click="startGame"
-          class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded"
-        >
-          Start Game
-        </button>
+  <div class="min-h-screen bg-gray-900">
+    <!-- 主菜单界面 -->
+    <div v-if="currentView === 'menu'" class="main-menu">
+      <div class="flex items-center justify-center min-h-screen">
+        <div class="text-center max-w-4xl mx-auto px-6">
+          <!-- 游戏标题 -->
+          <div class="mb-12">
+            <h1 class="text-6xl font-bold mb-4 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 bg-clip-text text-transparent">
+              蛇战天下
+            </h1>
+            <p class="text-xl text-gray-300">多人在线联机关卡挑战</p>
+          </div>
+          
+          <!-- 游戏模式选择 -->
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+            <!-- 单人模式 -->
+            <div 
+              @click="startSinglePlayer"
+              class="game-mode-card bg-gradient-to-br from-green-600 to-green-800 hover:from-green-500 hover:to-green-700 cursor-pointer transform hover:scale-105 transition-all duration-200"
+            >
+              <div class="p-6 text-center">
+                <div class="text-4xl mb-4">🐍</div>
+                <h3 class="text-xl font-bold text-white mb-2">单人模式</h3>
+                <p class="text-green-100 text-sm">经典贪吃蛇游戏</p>
+              </div>
+            </div>
+            
+            <!-- 关卡挑战 -->
+            <div 
+              @click="showLevelSelection"
+              class="game-mode-card bg-gradient-to-br from-blue-600 to-blue-800 hover:from-blue-500 hover:to-blue-700 cursor-pointer transform hover:scale-105 transition-all duration-200"
+            >
+              <div class="p-6 text-center">
+                <div class="text-4xl mb-4">🏆</div>
+                <h3 class="text-xl font-bold text-white mb-2">关卡挑战</h3>
+                <p class="text-blue-100 text-sm">94个精心设计的关卡</p>
+              </div>
+            </div>
+            
+            <!-- 多人对战 -->
+            <div 
+              @click="showMultiplayerLobby"
+              class="game-mode-card bg-gradient-to-br from-purple-600 to-purple-800 hover:from-purple-500 hover:to-purple-700 cursor-pointer transform hover:scale-105 transition-all duration-200"
+            >
+              <div class="p-6 text-center">
+                <div class="text-4xl mb-4">⚔️</div>
+                <h3 class="text-xl font-bold text-white mb-2">多人对战</h3>
+                <p class="text-purple-100 text-sm">实时联机对战</p>
+              </div>
+            </div>
+            
+            <!-- 设置选项 -->
+            <div 
+              @click="showSettings"
+              class="game-mode-card bg-gradient-to-br from-gray-600 to-gray-800 hover:from-gray-500 hover:to-gray-700 cursor-pointer transform hover:scale-105 transition-all duration-200"
+            >
+              <div class="p-6 text-center">
+                <div class="text-4xl mb-4">⚙️</div>
+                <h3 class="text-xl font-bold text-white mb-2">游戏设置</h3>
+                <p class="text-gray-100 text-sm">个性化配置</p>
+              </div>
+            </div>
+          </div>
+          
+          <!-- 玩家统计 -->
+          <div class="bg-gray-800 rounded-lg p-6 mb-8">
+            <h3 class="text-white text-lg font-bold mb-4">个人统计</h3>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
+              <div>
+                <div class="text-2xl font-bold text-blue-400">{{ gameStats.gamesPlayed }}</div>
+                <div class="text-gray-400 text-sm">游戏次数</div>
+              </div>
+              <div>
+                <div class="text-2xl font-bold text-green-400">{{ gameStats.highScore }}</div>
+                <div class="text-gray-400 text-sm">最高分数</div>
+              </div>
+              <div>
+                <div class="text-2xl font-bold text-purple-400">{{ totalLevelsCompleted }}</div>
+                <div class="text-gray-400 text-sm">完成关卡</div>
+              </div>
+              <div>
+                <div class="text-2xl font-bold text-yellow-400">{{ totalStarsEarned }}</div>
+                <div class="text-gray-400 text-sm">获得星星</div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- 版本信息 -->
+          <div class="text-gray-500 text-sm">
+            版本 2.0.0 - 多人联机关卡挑战版
+          </div>
+        </div>
       </div>
-      <div
-        class="grid gap-px bg-gray-700 p-1 rounded-lg shadow-lg"
-        :style="{
-          'grid-template-columns': `repeat(${gridSize}, minmax(0, 1fr))`,
-          width: '800px',
-          height: '800px'
-        }"
+    </div>
+    
+    <!-- 单人游戏界面 -->
+    <SinglePlayerGame 
+      v-else-if="currentView === 'singlePlayer'"
+      @back="currentView = 'menu'"
+    />
+    
+    <!-- 关卡选择界面 -->
+    <LevelSelection 
+      v-else-if="currentView === 'levels'"
+      @back="currentView = 'menu'"
+      @startLevel="startLevelGame"
+      @startDailyChallenge="startDailyChallenge"
+    />
+    
+    <!-- 关卡游戏界面 -->
+    <LevelGame 
+      v-else-if="currentView === 'levelGame'"
+      :levelId="selectedLevel"
+      @levelChange="startLevelGame"
+      @backToSelection="currentView = 'levels'"
+    />
+    
+    <!-- 多人游戏大厅 -->
+    <MultiplayerLobby 
+      v-else-if="currentView === 'multiplayerLobby'"
+      @back="currentView = 'menu'"
+      @joinedRoom="currentView = 'multiplayerGame'"
+      @createdRoom="currentView = 'multiplayerGame'"
+    />
+    
+    <!-- 多人游戏界面 -->
+    <MultiplayerGame 
+      v-else-if="currentView === 'multiplayerGame'"
+      @back="currentView = 'multiplayerLobby'"
+      @gameEnded="handleMultiplayerGameEnd"
+    />
+    
+    <!-- 设置界面 -->
+    <GameSettings 
+      v-else-if="currentView === 'settings'"
+      @back="currentView = 'menu'"
+    />
+    
+    <!-- 全局通知 -->
+    <div v-if="notification" class="fixed top-4 right-4 z-50">
+      <div 
+        class="bg-blue-600 text-white px-6 py-3 rounded-lg shadow-lg transform transition-all duration-300"
+        :class="notification.type === 'success' ? 'bg-green-600' : notification.type === 'error' ? 'bg-red-600' : 'bg-blue-600'"
       >
-        <div
-          v-for="(cell, index) in cells"
-          :key="index"
-          class="w-full h-full rounded-sm"
-          :class="{
-            'bg-green-500': isSnake(index),
-            'bg-blue-500': isAiSnake(index),
-            'bg-red-500': isFood(index),
-            'bg-gray-600': isObstacle(index),
-            'bg-gray-800': !isSnake(index) && !isAiSnake(index) && !isFood(index) && !isObstacle(index)
-          }"
-        ></div>
-      </div>
-      <div class="mt-4 text-white text-xl">
-        Score: {{ score }}
-      </div>
-      <div class="mt-1 text-white text-lg">
-        AI Score: {{ aiScore }}
-      </div>
-      <div v-if="gameOver" class="mt-4 text-red-500 text-2xl font-bold">
-        Game Over!
+        {{ notification.message }}
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 
-const gridSize = 32
-const cells = ref(Array(gridSize * gridSize).fill(0))
-const snake = ref([])
-const direction = ref('right')
-const food = ref(-1)
-const obstacles = ref([])
-const isPlaying = ref(false)
-const gameOver = ref(false)
-const score = ref(0)
-const aiSnake = ref([])
-const aiDirection = ref('left')
-const aiScore = ref(0)
-const aiGameOver = ref(false)
-let gameInterval
+// 导入组件
+import SinglePlayerGame from './components/SinglePlayerGame.vue'
+import LevelSelection from './components/levels/LevelSelection.vue'
+import LevelGame from './components/levels/LevelGame.vue'
+import MultiplayerLobby from './components/multiplayer/MultiplayerLobby.vue'
+import MultiplayerGame from './components/multiplayer/MultiplayerGame.vue'
+import GameSettings from './components/GameSettings.vue'
 
-const createObstacles = () => {
-  obstacles.value = []
-  const obstacleCount = Math.floor(Math.random() * 10) + 5 // 5-15 obstacles
-  while (obstacles.value.length < obstacleCount) {
-    const pos = Math.floor(Math.random() * cells.value.length)
-    if (!obstacles.value.includes(pos)) {
-      obstacles.value.push(pos)
-    }
-  }
+// 响应式数据
+const currentView = ref('menu')
+const selectedLevel = ref(1)
+const notification = ref(null)
+
+// 计算属性 - 临时使用模拟数据
+const gameStats = computed(() => ({ gamesPlayed: 0, highScore: 0 }))
+const totalLevelsCompleted = computed(() => 0)
+const totalStarsEarned = computed(() => 0)
+
+// 方法
+const startSinglePlayer = () => {
+  currentView.value = 'singlePlayer'
 }
 
-const generateFood = () => {
-  let newFood
-  do {
-    newFood = Math.floor(Math.random() * cells.value.length)
-  } while (
-    snake.value.includes(newFood) ||
-    obstacles.value.includes(newFood) ||
-    (aiSnake.value && aiSnake.value.includes(newFood)) // Check against AI snake
-  )
-  food.value = newFood
+const showLevelSelection = () => {
+  currentView.value = 'levels'
 }
 
-const isSnake = (index) => snake.value.includes(index)
-const isAiSnake = (index) => aiSnake.value.includes(index) // AI Snake check
-const isFood = (index) => food.value === index
-const isObstacle = (index) => obstacles.value.includes(index)
-
-const calculateNewHeadInternal = (currentHead, dir, currentGridSize, totalCells) => {
-  // Renamed to avoid conflict with the one inside moveAiSnake if it's not perfectly scoped
-  // Or ensure moveAiSnake's calculateNewHead uses its own scope's gridSize and cells.value.length
-  let newH
-  switch (dir) {
-    case 'up':
-      newH = currentHead - currentGridSize
-      if (newH < 0) newH += totalCells
-      break
-    case 'down':
-      newH = currentHead + currentGridSize
-      if (newH >= totalCells) newH -= totalCells
-      break
-    case 'left':
-      newH = currentHead % currentGridSize === 0 ? currentHead + currentGridSize - 1 : currentHead - 1
-      break
-    case 'right':
-      newH = currentHead % currentGridSize === currentGridSize - 1 ? currentHead - currentGridSize + 1 : currentHead + 1
-      break
-  }
-  return newH
+const showMultiplayerLobby = () => {
+  currentView.value = 'multiplayerLobby'
 }
 
-const countOpenAdjacentCells = (position, currentAiSnakeSegments, playerSnakeSegments, obstacleCells) => {
-  let openCount = 0
-  const directions = ['up', 'down', 'left', 'right']
-  for (const dir of directions) {
-    const neighbor = calculateNewHeadInternal(position, dir, gridSize, cells.value.length) // Uses gridSize and cells.value.length from outer scope
-
-    // Check if neighbor is safe (not obstacle, not player, not AI)
-    // For this specific count, the AI snake body to check against should be its current state.
-    // If the AI is length 1, its head (position) is part of currentAiSnakeSegments. A neighbor cannot be itself.
-    const isNeighborObstacle = obstacleCells.includes(neighbor)
-    const isNeighborPlayer = playerSnakeSegments.includes(neighbor)
-    const isNeighborAi = currentAiSnakeSegments.includes(neighbor) // Check against the whole current AI snake
-
-    if (!isNeighborObstacle && !isNeighborPlayer && !isNeighborAi) {
-      openCount++
-    }
-  }
-  return openCount
+const showSettings = () => {
+  currentView.value = 'settings'
 }
 
-
-const move = () => {
-  const head = snake.value[0]
-  let newHead
-
-  switch (direction.value) {
-    case 'up':
-      newHead = head - gridSize
-      if (newHead < 0) newHead += cells.value.length
-      break
-    case 'down':
-      newHead = head + gridSize
-      if (newHead >= cells.value.length) newHead -= cells.value.length
-      break
-    case 'left':
-      newHead = head % gridSize === 0 ? head + gridSize - 1 : head - 1
-      break
-    case 'right':
-      newHead = head % gridSize === gridSize - 1 ? head - gridSize + 1 : head + 1
-      break
-  }
-
-  if (
-    obstacles.value.includes(newHead) ||
-    snake.value.includes(newHead) ||
-    (aiSnake.value.length > 0 && !aiGameOver.value && aiSnake.value.includes(newHead))
-  ) {
-    endGame()
-    return
-  }
-
-  snake.value.unshift(newHead)
-
-  if (newHead === food.value) {
-    score.value += 10
-    generateFood()
-  } else {
-    snake.value.pop()
-  }
+const startLevelGame = (levelId) => {
+  selectedLevel.value = levelId
+  currentView.value = 'levelGame'
 }
 
-const moveAiSnake = () => {
-  if (gameOver.value || !isPlaying.value || aiSnake.value.length === 0 || aiGameOver.value) {
-    return
-  }
-
-  const head = aiSnake.value[0]
-  const foodPos = food.value
-
-  // If food is somehow not set, AI waits.
-  if (foodPos === -1) {
-    return;
-  }
-
-  const headRow = Math.floor(head / gridSize)
-  const headCol = head % gridSize
-  const foodRow = Math.floor(foodPos / gridSize)
-  const foodCol = foodPos % gridSize
-
-  const deltaRow = foodRow - headRow
-  const deltaCol = foodCol - headCol
-
-  const aiOpposites = {
-    up: 'down',
-    down: 'up',
-    left: 'right',
-    right: 'left',
-  }
-
-  const calculateNewHead = (currentHead, dir) => {
-    let newH
-    switch (dir) {
-      case 'up':
-        newH = currentHead - gridSize
-        if (newH < 0) newH += cells.value.length
-        break
-      case 'down':
-        newH = currentHead + gridSize
-        if (newH >= cells.value.length) newH -= cells.value.length
-        break
-      case 'left':
-        newH = currentHead % gridSize === 0 ? currentHead + gridSize - 1 : currentHead - 1
-        break
-      case 'right':
-        newH = currentHead % gridSize === gridSize - 1 ? currentHead - gridSize + 1 : currentHead + 1
-        break
-    }
-    return newH
-  }
-
-  const isSafe = (posCheck) => {
-    // For self-collision, AI can move into its previous tail position
-    // This simple check is okay if tail is popped right after unshift
-    const tempAiSnakeForCheck = aiSnake.value.slice(0, aiSnake.value.length > 1 ? -1 : 1);
-
-    return !obstacles.value.includes(posCheck) &&
-           !snake.value.includes(posCheck) && // Check against player snake
-           !tempAiSnakeForCheck.includes(posCheck) // Check against AI snake (excluding tail)
-  }
-
-  let preferredDirections = []
-  if (Math.abs(deltaCol) > Math.abs(deltaRow)) {
-    if (deltaCol > 0) preferredDirections.push('right')
-    else if (deltaCol < 0) preferredDirections.push('left')
-    if (deltaRow > 0) preferredDirections.push('down')
-    else if (deltaRow < 0) preferredDirections.push('up')
-  } else {
-    if (deltaRow > 0) preferredDirections.push('down')
-    else if (deltaRow < 0) preferredDirections.push('up')
-    if (deltaCol > 0) preferredDirections.push('right')
-    else if (deltaCol < 0) preferredDirections.push('left')
-  }
-
-  // Add remaining directions to try if preferred ones are blocked
-  const allDirections = ['up', 'down', 'left', 'right']
-  for (const dir of allDirections) {
-    if (!preferredDirections.includes(dir)) {
-      preferredDirections.push(dir)
-    }
-  }
-
-  let chosenDirection = null
-  for (const dir of preferredDirections) {
-    if (aiSnake.value.length > 1 && dir === aiOpposites[aiDirection.value]) {
-      continue // Don't move directly backward
-    }
-    const nextHead = calculateNewHead(head, dir)
-    if (isSafe(nextHead)) {
-      chosenDirection = dir
-      break
-    }
-  }
-
-  // If no safe preferred/alternative move, try to keep current direction if it's not into itself (and not reversing)
-  if (!chosenDirection && aiDirection.value && !(aiSnake.value.length > 1 && aiOpposites[aiDirection.value] === aiDirection.value)) {
-      const currentDirNextHead = calculateNewHead(head, aiDirection.value);
-      if(isSafe(currentDirNextHead)){
-          chosenDirection = aiDirection.value;
-      }
-  }
-
-
-  // If still no direction, use the new fallback logic with countOpenAdjacentCells
-  if (!chosenDirection) {
-    let bestFallbackMove = null
-    let maxOpenCells = -1
-
-    // Shuffle directions to break ties randomly or if all have same low open cells
-    const potentialFallbackMoves = allDirections.sort(() => Math.random() - 0.5);
-
-    for (const moveDir of potentialFallbackMoves) {
-      if (aiSnake.value.length > 1 && moveDir === aiOpposites[aiDirection.value]) {
-        continue // Skip reverse move
-      }
-      const testHead = calculateNewHead(head, moveDir) // calculateNewHead from moveAiSnake scope
-      if (isSafe(testHead)) { // isSafe from moveAiSnake scope
-        // Pass aiSnake.value as it is, countOpen... will handle it.
-        const openCount = countOpenAdjacentCells(testHead, aiSnake.value, snake.value, obstacles.value)
-        if (openCount > maxOpenCells) {
-          maxOpenCells = openCount
-          bestFallbackMove = moveDir
-        }
-      }
-    }
-    if (bestFallbackMove) {
-      chosenDirection = bestFallbackMove
-    }
-    // If still no chosenDirection after this, AI will freeze for a turn.
-  }
-
-  if (chosenDirection) {
-    aiDirection.value = chosenDirection
-    // Recalculate finalNewHead based on the chosenDirection (could be from fallback)
-    const finalNewHead = calculateNewHead(head, aiDirection.value)
-
-    const collidedWithObstacle = obstacles.value.includes(finalNewHead)
-    const collidedWithPlayer = snake.value.includes(finalNewHead)
-    let collidedWithSelf = false
-    if (aiSnake.value.length > 0) {
-      const bodySegments = aiSnake.value.slice(0, aiSnake.value.length - 1)
-      if (bodySegments.includes(finalNewHead)) {
-        collidedWithSelf = true
-      }
-    }
-
-    if (collidedWithObstacle || collidedWithPlayer || collidedWithSelf) {
-      aiGameOver.value = true
-      // Optional: Clear AI snake or mark it as game over in UI if needed
-      // aiSnake.value = []
-      return
-    }
-
-    aiSnake.value.unshift(finalNewHead)
-
-    if (finalNewHead === food.value) {
-      aiScore.value += 10
-      generateFood()
-      // Tail is not popped, AI snake grows
-    } else {
-      // Only pop tail if not eating
-      if (aiSnake.value.length > 0) { // Safety check though unshift just happened
-         aiSnake.value.pop()
-      }
-    }
-  }
-  // If no chosenDirection, AI effectively "freezes" for this turn.
+const startDailyChallenge = (challenge) => {
+  showNotification(`开始每日挑战: ${challenge.name}`, 'success')
+  currentView.value = 'singlePlayer'
 }
 
-const startGame = () => {
-  snake.value = [Math.floor(gridSize * gridSize / 2)]
-  direction.value = 'right'
-  score.value = 0
-  gameOver.value = false
-  aiGameOver.value = false // Reset AI game over state
-  isPlaying.value = true
-  createObstacles() // Obstacles created first
-
-  aiScore.value = 0
-  aiDirection.value = 'left'
-  let aiStartPos
-  do {
-    aiStartPos = Math.floor(Math.random() * cells.value.length)
-  } while (
-    aiStartPos === snake.value[0] || // Avoid player start
-    obstacles.value.includes(aiStartPos) // Avoid obstacles
-  )
-  aiSnake.value = [aiStartPos]
-
-  generateFood() // Food generated after snakes and obstacles
-  gameInterval = setInterval(() => {
-    move()
-    moveAiSnake()
-  }, 150)
+const handleMultiplayerGameEnd = () => {
+  currentView.value = 'multiplayerLobby'
+  showNotification('游戏结束', 'info')
 }
 
-const endGame = () => {
-  clearInterval(gameInterval)
-  gameOver.value = true
-  isPlaying.value = false
+const showNotification = (message, type = 'info') => {
+  notification.value = { message, type }
+  setTimeout(() => {
+    notification.value = null
+  }, 3000)
 }
 
-const handleKeydown = (e) => {
-  if (!isPlaying.value) return
-
-  const key = e.key.toLowerCase()
-  const opposites = {
-    arrowup: 'down',
-    arrowdown: 'up',
-    arrowleft: 'right',
-    arrowright: 'left',
-    w: 'down',
-    s: 'up',
-    a: 'right',
-    d: 'left'
-  }
-
-  const newDirection = {
-    arrowup: 'up',
-    arrowdown: 'down',
-    arrowleft: 'left',
-    arrowright: 'right',
-    w: 'up',
-    s: 'down',
-    a: 'left',
-    d: 'right'
-  }[key]
-
-  if (newDirection && opposites[key] !== direction.value) {
-    direction.value = newDirection
-  }
-}
-
+// 生命周期
 onMounted(() => {
-  window.addEventListener('keydown', handleKeydown)
-})
-
-onUnmounted(() => {
-  window.removeEventListener('keydown', handleKeydown)
-  clearInterval(gameInterval)
+  console.log('Vue Snake Game 初始化完成')
 })
 </script>
+
+<style scoped>
+.main-menu {
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+  min-height: 100vh;
+}
+
+.game-mode-card {
+  border-radius: 1rem;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.game-mode-card:hover {
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.game-mode-card {
+  animation: fadeIn 0.6s ease-out;
+}
+
+.game-mode-card:nth-child(1) { animation-delay: 0.1s; }
+.game-mode-card:nth-child(2) { animation-delay: 0.2s; }
+.game-mode-card:nth-child(3) { animation-delay: 0.3s; }
+.game-mode-card:nth-child(4) { animation-delay: 0.4s; }
+</style>
