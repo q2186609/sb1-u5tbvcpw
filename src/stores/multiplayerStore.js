@@ -27,12 +27,14 @@ export const useMultiplayerStore = defineStore('multiplayer', () => {
   const gameSession = ref({
     id: '',
     mode: '', // 'classic', 'team', 'survival', 'score'
-    status: 'waiting', // 'waiting', 'starting', 'playing', 'paused', 'finished'
+    status: 'waiting', // 'waiting', 'preparing', 'countdown', 'starting', 'playing', 'paused', 'finished'
     startTime: null,
     endTime: null,
     winner: null,
     players: [],
-    gameData: {}
+    gameData: {},
+    readyPlayers: [], // 已准备的玩家ID列表
+    countdownValue: 0 // 倒计时值
   })
   
   // 玩家状态
@@ -81,6 +83,19 @@ export const useMultiplayerStore = defineStore('multiplayer', () => {
            currentRoom.value && 
            currentRoom.value.players.length >= currentRoom.value.minPlayers &&
            gameSession.value.status === 'waiting'
+  })
+  
+  // 检查所有玩家是否都已准备
+  const allPlayersReady = computed(() => {
+    if (!currentRoom.value || !currentRoom.value.players) return false
+    const totalPlayers = currentRoom.value.players.length
+    const readyPlayersCount = gameSession.value.readyPlayers.length
+    return totalPlayers >= currentRoom.value.minPlayers && readyPlayersCount === totalPlayers
+  })
+  
+  // 检查当前玩家是否已准备
+  const isPlayerReady = computed(() => {
+    return gameSession.value.readyPlayers.includes(localPlayer.value.id)
   })
   
   const gameProgress = computed(() => {
@@ -334,7 +349,8 @@ export const useMultiplayerStore = defineStore('multiplayer', () => {
       id: Date.now().toString(),
       playerId: localPlayer.value.id,
       playerName: localPlayer.value.name,
-      content: message.trim(),
+      message: message.trim(), // 使用message字段
+      content: message.trim(), // 兼容content字段
       timestamp: new Date().toISOString(),
       type: 'text'
     }
@@ -342,12 +358,26 @@ export const useMultiplayerStore = defineStore('multiplayer', () => {
     messages.value.push(chatMessage)
     
     if (socket.value) {
-      socket.value.emit('chat_message', chatMessage)
+      socket.value.emit('chat_message', {
+        message: message.trim(),
+        roomId: currentRoom.value?.id
+      })
     }
   }
   
   const receiveMessage = (message) => {
-    messages.value.push(message)
+    // 统一消息格式
+    const normalizedMessage = {
+      id: message.id || Date.now().toString(),
+      playerId: message.playerId,
+      playerName: message.playerName,
+      message: message.message || message.content,
+      content: message.message || message.content,
+      timestamp: message.timestamp,
+      type: message.type || 'text'
+    }
+    
+    messages.value.push(normalizedMessage)
     if (message.playerId !== localPlayer.value.id) {
       unreadCount.value++
     }
@@ -400,11 +430,67 @@ export const useMultiplayerStore = defineStore('multiplayer', () => {
       endTime: null,
       winner: null,
       players: [],
-      gameData: {}
+      gameData: {},
+      readyPlayers: [],
+      countdownValue: 0
     }
     remotePlayers.value = []
     messages.value = []
     unreadCount.value = 0
+  }
+  
+  // 准备系统方法
+  const togglePlayerReady = () => {
+    if (!currentRoom.value || !localPlayer.value.id) return
+    
+    const playerId = localPlayer.value.id
+    const readyIndex = gameSession.value.readyPlayers.indexOf(playerId)
+    
+    if (readyIndex === -1) {
+      // 添加到准备列表
+      gameSession.value.readyPlayers.push(playerId)
+    } else {
+      // 从准备列表中移除
+      gameSession.value.readyPlayers.splice(readyIndex, 1)
+    }
+    
+    // 如果所有玩家都准备好了，开始倒计时
+    if (allPlayersReady.value && isHost.value) {
+      startCountdown()
+    }
+  }
+  
+  const setPlayerReady = (playerId, ready) => {
+    const readyIndex = gameSession.value.readyPlayers.indexOf(playerId)
+    
+    if (ready && readyIndex === -1) {
+      gameSession.value.readyPlayers.push(playerId)
+    } else if (!ready && readyIndex !== -1) {
+      gameSession.value.readyPlayers.splice(readyIndex, 1)
+    }
+  }
+  
+  const startCountdown = () => {
+    if (gameSession.value.status !== 'waiting') return
+    
+    gameSession.value.status = 'countdown'
+    gameSession.value.countdownValue = 3
+    
+    const countdownInterval = setInterval(() => {
+      gameSession.value.countdownValue--
+      
+      if (gameSession.value.countdownValue <= 0) {
+        clearInterval(countdownInterval)
+        gameSession.value.status = 'playing'
+        gameSession.value.startTime = Date.now()
+      }
+    }, 1000)
+  }
+  
+  const resetReady = () => {
+    gameSession.value.readyPlayers = []
+    gameSession.value.status = 'waiting'
+    gameSession.value.countdownValue = 0
   }
   
   return {
@@ -432,6 +518,8 @@ export const useMultiplayerStore = defineStore('multiplayer', () => {
     alivePlayers,
     leaderboard,
     canStartGame,
+    allPlayersReady,
+    isPlayerReady,
     gameProgress,
     
     // 方法
@@ -455,6 +543,11 @@ export const useMultiplayerStore = defineStore('multiplayer', () => {
     sendMessage,
     receiveMessage,
     markMessagesAsRead,
+    togglePlayerReady,
+    setPlayerReady,
+    startCountdown,
+    resetReady,
+    generateSessionId,
     resetState
   }
 })

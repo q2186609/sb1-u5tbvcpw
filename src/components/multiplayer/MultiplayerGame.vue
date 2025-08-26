@@ -27,8 +27,83 @@
           tabindex="0"
         ></canvas>
         
-        <!-- 等待其他玩家 -->
-        <div v-if="waitingForPlayers" class="waiting-overlay absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center">
+        <!-- 准备阶段 -->
+        <div v-if="gameSession.status === 'waiting'" class="prepare-overlay absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center">
+          <div class="prepare-card bg-gray-800 p-8 rounded-lg text-center max-w-md">
+            <h2 class="text-3xl font-bold text-white mb-6">等待玩家准备</h2>
+            
+            <!-- 玩家准备状态 -->
+            <div class="players-ready-status mb-6">
+              <div 
+                v-for="player in roomPlayers" 
+                :key="player.id"
+                class="flex items-center justify-between p-3 mb-2 rounded-lg"
+                :class="isPlayerReady(player.id) ? 'bg-green-700' : 'bg-gray-700'"
+              >
+                <div class="flex items-center gap-3">
+                  <div 
+                    class="w-8 h-8 rounded-full flex items-center justify-center text-white font-bold"
+                    :style="{ backgroundColor: getPlayerColor(roomPlayers.indexOf(player)) }"
+                  >
+                    {{ player.name.charAt(0).toUpperCase() }}
+                  </div>
+                  <span class="text-white font-medium">{{ player.name }}</span>
+                  <span v-if="player.id === playerId" class="text-blue-300 text-sm">(你)</span>
+                </div>
+                <div class="ready-status">
+                  <span 
+                    v-if="isPlayerReady(player.id)" 
+                    class="text-green-400 font-bold flex items-center gap-1"
+                  >
+                    ✓ 已准备
+                  </span>
+                  <span v-else class="text-gray-400">未准备</span>
+                </div>
+              </div>
+            </div>
+            
+            <!-- 准备按钮 -->
+            <div class="ready-controls mb-4">
+              <button
+                @click="toggleReady"
+                class="ready-btn px-8 py-3 rounded-lg font-bold text-lg transition-all duration-200"
+                :class="isCurrentPlayerReady ? 
+                  'bg-red-600 hover:bg-red-500 text-white' : 
+                  'bg-green-600 hover:bg-green-500 text-white'"
+              >
+                {{ isCurrentPlayerReady ? '取消准备' : '准备' }}
+              </button>
+            </div>
+            
+            <!-- 等待提示 -->
+            <p class="text-gray-300 text-sm">
+              需要最少 {{ minPlayers }} 名玩家，当前 {{ readyPlayersCount }}/{{ roomPlayers.length }} 人已准备
+            </p>
+            
+            <!-- 房主强制开始按钮（仅房主可见） -->
+            <div v-if="isHost && roomPlayers.length >= minPlayers" class="mt-4">
+              <button
+                @click="forceStart"
+                class="force-start-btn bg-orange-600 hover:bg-orange-500 text-white px-6 py-2 rounded-lg text-sm"
+              >
+                强制开始游戏
+              </button>
+            </div>
+          </div>
+        </div>
+        
+        <!-- 倒计时阶段 -->
+        <div v-if="gameSession.status === 'countdown'" class="countdown-overlay absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center">
+          <div class="countdown-card text-center">
+            <div class="countdown-number text-8xl font-bold text-white mb-4 animate-pulse">
+              {{ gameSession.countdownValue || '开始!' }}
+            </div>
+            <p class="text-2xl text-gray-300">游戏即将开始...</p>
+          </div>
+        </div>
+        
+        <!-- 等待其他玩家（旧版，保留作为备用） -->
+        <div v-if="waitingForPlayers && gameSession.status === 'waiting'" class="waiting-overlay absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center" style="display: none;">
           <div class="waiting-card bg-gray-800 p-8 rounded-lg text-center">
             <h2 class="text-3xl font-bold text-white mb-4">等待其他玩家...</h2>
             <div class="loading-spinner mb-4">
@@ -68,13 +143,13 @@
                 @click="playAgain"
                 class="play-again-btn bg-green-600 hover:bg-green-500 text-white px-6 py-3 rounded-lg transition-colors"
               >
-                再玩一局
+                🔄 重新准备
               </button>
               <button 
                 @click="leaveGame"
                 class="back-btn bg-gray-600 hover:bg-gray-500 text-white px-6 py-3 rounded-lg transition-colors"
               >
-                返回大厅
+                🚪 返回大厅
               </button>
             </div>
           </div>
@@ -114,14 +189,18 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useMultiplayerStore } from '../../stores/multiplayerStore.js'
+import { socketService } from '../../services/socketService.js'
 
 // 定义 emits
 const emit = defineEmits(['back', 'gameEnded'])
 
 // 使用多人游戏状态
 const multiplayerStore = useMultiplayerStore()
+
+// Canvas引用
+const gameCanvas = ref(null)
 
 // 动画和特效状态
 const animationTime = ref(0)
@@ -135,29 +214,29 @@ const waitingForPlayers = ref(true)
 const gameEnded = ref(false)
 const isPaused = ref(false)
 
-// 玩家数据
-const playerId = ref('player-' + Math.random().toString(36).substr(2, 9))
-const roomId = ref('DEMO-ROOM')
-const maxPlayers = ref(4)
+// 从 multiplayerStore 获取游戏会话状态
+const gameSession = computed(() => multiplayerStore.gameSession)
+const isHost = computed(() => multiplayerStore.isHost)
+const roomPlayers = computed(() => multiplayerStore.currentRoom?.players || [])
+const minPlayers = computed(() => multiplayerStore.currentRoom?.minPlayers || 2)
+const readyPlayersCount = computed(() => gameSession.value.readyPlayers.length)
+const isCurrentPlayerReady = computed(() => multiplayerStore.isPlayerReady)
 
-// 模拟玩家数据
+// 玩家数据
+const playerId = computed(() => multiplayerStore.localPlayer?.id || 'unknown')
+const roomId = computed(() => multiplayerStore.currentRoom?.id || 'UNKNOWN')
+const maxPlayers = computed(() => multiplayerStore.currentRoom?.maxPlayers || 4)
+const playerCount = computed(() => multiplayerStore.currentRoom?.players?.length || 1)
+
+// 初始化玩家数据
 const players = ref([
   { 
-    id: playerId.value, 
+    id: 'temp-player', 
     name: '玩家1', 
     color: '#10B981', 
     score: 0,
     snake: [{ x: 10, y: 10 }],
     direction: { x: 1, y: 0 },
-    alive: true
-  },
-  { 
-    id: 'player-2', 
-    name: '玩家2', 
-    color: '#3B82F6', 
-    score: 0,
-    snake: [{ x: 20, y: 20 }],
-    direction: { x: -1, y: 0 },
     alive: true
   }
 ])
@@ -169,7 +248,6 @@ const food = ref([
 ])
 
 // 计算属性
-const playerCount = computed(() => players.value.length)
 const sortedPlayers = computed(() => 
   [...players.value].sort((a, b) => b.score - a.score)
 )
@@ -182,11 +260,87 @@ const initGame = () => {
   gameEnded.value = false
   isPaused.value = false
   
-  // 模拟等待玩家过程
-  setTimeout(() => {
-    waitingForPlayers.value = false
-    startGameLoop()
-  }, 2000)
+  console.log('🎮 初始化游戏，当前玩家ID:', playerId.value)
+  console.log('🏠 房间玩家:', multiplayerStore.currentRoom?.players)
+  
+  // 从 multiplayerStore 获取房间数据
+  if (multiplayerStore.currentRoom && multiplayerStore.currentRoom.players) {
+    players.value = multiplayerStore.currentRoom.players.map((player, index) => {
+      const playerData = {
+        id: player.id,
+        name: player.name,
+        color: getPlayerColor(index),
+        score: 0,
+        snake: [{ x: 10 + index * 10, y: 10 + index * 5 }],
+        direction: { x: 1, y: 0 },
+        alive: true
+      }
+      console.log(`👤 初始化玩家 ${index}:`, playerData)
+      return playerData
+    })
+  }
+  
+  // 确保当前玩家存在于玩家列表中
+  const currentPlayer = players.value.find(p => p.id === playerId.value)
+  if (!currentPlayer) {
+    console.warn('⚠️ 当前玩家不在玩家列表中，添加默认玩家')
+    players.value.push({
+      id: playerId.value,
+      name: multiplayerStore.localPlayer?.name || '未知玩家',
+      color: getPlayerColor(players.value.length),
+      score: 0,
+      snake: [{ x: 15, y: 15 }],
+      direction: { x: 1, y: 0 },
+      alive: true
+    })
+  }
+  
+  // 初始化游戏会话
+  if (!gameSession.value.id) {
+    multiplayerStore.gameSession.id = multiplayerStore.generateSessionId()
+    multiplayerStore.gameSession.mode = multiplayerStore.currentRoom?.gameMode || 'classic'
+    multiplayerStore.gameSession.status = 'waiting'
+  }
+  
+  // 不再自动开始游戏，等待玩家准备
+  waitingForPlayers.value = false
+}
+
+// 获取玩家颜色
+const getPlayerColor = (index) => {
+  const colors = ['#10B981', '#3B82F6', '#F59E0B', '#EF4444', '#8B5CF6', '#F97316']
+  return colors[index % colors.length]
+}
+
+// 准备系统方法
+const toggleReady = () => {
+  multiplayerStore.togglePlayerReady()
+  
+  // 发送准备状态给服务器
+  if (socketService.isConnected) {
+    socketService.socket.emit('player_ready', {
+      playerId: playerId.value,
+      ready: multiplayerStore.isPlayerReady,
+      roomId: roomId.value
+    })
+  }
+}
+
+const isPlayerReady = (playerIdToCheck) => {
+  return gameSession.value.readyPlayers.includes(playerIdToCheck)
+}
+
+const forceStart = () => {
+  if (isHost.value && roomPlayers.value.length >= minPlayers.value) {
+    multiplayerStore.startCountdown()
+    
+    // 通知服务器强制开始游戏
+    if (socketService.isConnected) {
+      socketService.socket.emit('force_start_game', {
+        roomId: roomId.value
+      })
+    }
+  }
 }
 
 // 生成食物
@@ -210,20 +364,46 @@ const generateFood = () => {
 
 // 更新游戏状态
 const updateGame = () => {
-  if (gameEnded.value || isPaused.value || waitingForPlayers.value) return
+  // 只在游戏结束或暂停时停止更新，不检查waitingForPlayers
+  if (gameEnded.value || isPaused.value) {
+    if (gameEnded.value) console.log('🚫 游戏已结束，停止更新')
+    if (isPaused.value) console.log('⏸️ 游戏已暂停，停止更新')
+    return
+  }
+  
+  // 只有在playing状态下才更新游戏
+  if (gameSession.value.status !== 'playing') {
+    return
+  }
 
-  players.value.forEach(player => {
+  players.value.forEach((player, playerIndex) => {
     if (!player.alive) return
+
+    // 只为当前玩家显示调试信息，且仅在方向改变时
+    const isCurrentPlayer = player.id === playerId.value
+    const oldDirection = { ...player.direction }
 
     // 移动蛇头
     const head = { ...player.snake[0] }
+    const oldX = head.x
+    const oldY = head.y
     head.x += player.direction.x
     head.y += player.direction.y
+
+    // 只在第一次移动或方向改变时输出调试信息
+    if (isCurrentPlayer && (Math.abs(head.x - oldX) > 0 || Math.abs(head.y - oldY) > 0)) {
+      // 只在移动时输出一次调试信息
+      if (!player._lastLoggedPosition || player._lastLoggedPosition.x !== head.x || player._lastLoggedPosition.y !== head.y) {
+        console.log(`🐍 玩家 ${player.name} 移动: (${oldX},${oldY}) -> (${head.x},${head.y}), 方向:`, player.direction)
+        player._lastLoggedPosition = { x: head.x, y: head.y }
+      }
+    }
 
     // 检查边界碰撞
     if (head.x < 0 || head.x >= canvasWidth / gridSize || 
         head.y < 0 || head.y >= canvasHeight / gridSize) {
       player.alive = false
+      console.log(`💥 玩家 ${player.name} 撞墙死亡: (${head.x},${head.y})`)
       return
     }
 
@@ -231,6 +411,7 @@ const updateGame = () => {
     const allSnakeSegments = players.value.flatMap(p => p.snake)
     if (allSnakeSegments.some(segment => segment.x === head.x && segment.y === head.y)) {
       player.alive = false
+      console.log(`💥 玩家 ${player.name} 撞蛇死亡: (${head.x},${head.y})`)
       return
     }
 
@@ -240,6 +421,7 @@ const updateGame = () => {
     const eatenFood = food.value.find(f => f.x === head.x && f.y === head.y)
     if (eatenFood) {
       player.score += eatenFood.type === 'bonus' ? 20 : 10
+      console.log(`🍎 玩家 ${player.name} 吃到食物，得分: ${player.score}`)
       // 移除被吃的食物
       food.value = food.value.filter(f => f !== eatenFood)
       // 生成新食物
@@ -542,6 +724,7 @@ const darkenColor = (color, percent) => {
 
 // 游戏主循环
 const gameStep = () => {
+  // console.log('🔄 游戏循环步骤执行') // 清除过多的调试输出
   updateGame()
   renderGame()
 }
@@ -550,6 +733,7 @@ const gameStep = () => {
 const startGameLoop = () => {
   if (gameLoop) clearInterval(gameLoop)
   gameLoop = setInterval(gameStep, 150)
+  console.log('✅ 游戏循环已启动，间隔: 150ms')
 }
 
 // 停止游戏循环
@@ -562,14 +746,25 @@ const stopGameLoop = () => {
 
 // 结束游戏
 const endGame = () => {
+  console.log('💯 游戏结束，显示游戏结束界面')
   gameEnded.value = true
   stopGameLoop()
-  emit('gameEnded')
+  
+  // 设置游戏会话状态为结束
+  multiplayerStore.gameSession.status = 'finished'
+  
+  // 不再发出 gameEnded 事件，避免直接返回大厅
+  // emit('gameEnded') // 已移除
 }
 
 // 再玩一局
 const playAgain = () => {
-  // 重置玩家状态
+  console.log('🔄 再玩一局，重置准备状态')
+  
+  // 重置游戏状态
+  gameEnded.value = false
+  
+  // 重置所有玩家的游戏数据（但不重新初始化游戏）
   players.value.forEach(player => {
     player.score = 0
     player.alive = true
@@ -577,70 +772,227 @@ const playAgain = () => {
       x: Math.floor(Math.random() * 20) + 10, 
       y: Math.floor(Math.random() * 20) + 10 
     }]
+    player.direction = { x: 1, y: 0 }
   })
   
+  // 重新生成食物
   generateFood()
-  initGame()
+  
+  // 重置准备系统，返回等待准备状态
+  multiplayerStore.resetReady()
+  multiplayerStore.gameSession.status = 'waiting'
+  
+  // 通知服务器重置游戏
+  if (socketService.isConnected && multiplayerStore.currentRoom) {
+    socketService.socket.emit('reset_game', {
+      roomId: roomId.value
+    })
+  }
+  
+  console.log('🚀 游戏已重置，等待玩家准备')
 }
 
 // 离开游戏
 const leaveGame = () => {
   stopGameLoop()
+  
+  // 离开房间
+  if (socketService.isConnected && multiplayerStore.currentRoom) {
+    socketService.leaveRoom()
+  }
+  
+  // 清理状态
+  multiplayerStore.currentRoom = null
+  multiplayerStore.isInRoom = false
+  multiplayerStore.isHost = false
+  
   emit('back')
 }
 
+// 键盘事件监听器
+let keyboardListener = null
+
 // 键盘事件处理
 const handleKeyDown = (event) => {
+  console.log('🎮 键盘事件触发:', event.key, '游戏状态:', gameSession.value.status, '游戏结束:', gameEnded.value)
+  
+  // 检查游戏状态
+  if (gameEnded.value) {
+    console.log('🚫 游戏已结束，忽略键盘输入')
+    return
+  }
+  if (gameSession.value.status !== 'playing') {
+    console.log('⚠️ 游戏未开始，当前状态:', gameSession.value.status)
+    return
+  }
+  
   const key = event.key
   const currentPlayer = players.value.find(p => p.id === playerId.value)
   
-  if (!currentPlayer || !currentPlayer.alive) return
+  console.log('🔍 查找玩家:', {
+    searchingForId: playerId.value,
+    foundPlayer: !!currentPlayer,
+    playerName: currentPlayer?.name,
+    playersInGame: players.value.map(p => ({ id: p.id, name: p.name }))
+  })
+  
+  if (!currentPlayer) {
+    console.warn('⚠️ 未找到当前玩家！')
+    return
+  }
+  
+  if (!currentPlayer.alive) {
+    console.log('💀 玩家已死亡，无法控制')
+    return
+  }
+  
+  console.log('📊 当前玩家方向:', currentPlayer.direction)
+  
+  let directionChanged = false
+  let newDirection = null
   
   switch (key) {
     case 'ArrowUp':
       if (currentPlayer.direction.y !== 1) {
-        currentPlayer.direction = { x: 0, y: -1 }
+        newDirection = { x: 0, y: -1 }
+        directionChanged = true
       }
       break
     case 'ArrowDown':
       if (currentPlayer.direction.y !== -1) {
-        currentPlayer.direction = { x: 0, y: 1 }
+        newDirection = { x: 0, y: 1 }
+        directionChanged = true
       }
       break
     case 'ArrowLeft':
       if (currentPlayer.direction.x !== 1) {
-        currentPlayer.direction = { x: -1, y: 0 }
+        newDirection = { x: -1, y: 0 }
+        directionChanged = true
       }
       break
     case 'ArrowRight':
       if (currentPlayer.direction.x !== -1) {
-        currentPlayer.direction = { x: 1, y: 0 }
+        newDirection = { x: 1, y: 0 }
+        directionChanged = true
       }
       break
     case ' ':
       isPaused.value = !isPaused.value
+      console.log('⏸️ 暂停状态切换:', isPaused.value)
       break
+  }
+  
+  if (directionChanged && newDirection) {
+    console.log('🔄 尝试改变方向:', currentPlayer.direction, '->', newDirection)
+    currentPlayer.direction = newDirection
+    console.log('✅ 方向已更新:', currentPlayer.direction)
+    
+    // 验证方向是否真的改变了
+    const verifyDirection = players.value.find(p => p.id === playerId.value)?.direction
+    console.log('🔍 验证方向更新:', verifyDirection)
   }
   
   event.preventDefault()
 }
 
+// 设置键盘监听
+const setupKeyboardListeners = () => {
+  // 移除之前的监听器
+  if (keyboardListener) {
+    document.removeEventListener('keydown', keyboardListener)
+  }
+  
+  // 创建新的监听器
+  keyboardListener = (event) => handleKeyDown(event)
+  
+  // 添加到document以确保全局监听
+  document.addEventListener('keydown', keyboardListener)
+  console.log('🎮 键盘监听器已设置')
+}
+
+// 移除键盘监听
+const removeKeyboardListeners = () => {
+  if (keyboardListener) {
+    document.removeEventListener('keydown', keyboardListener)
+    keyboardListener = null
+    console.log('🎮 键盘监听器已移除')
+  }
+}
+
 // 组件挂载时初始化
 onMounted(async () => {
   await nextTick()
+  
+  // 检查Socket连接状态
+  if (!socketService.isConnected) {
+    console.warn('⚠️ Socket未连接，尝试重新连接...')
+    try {
+      await socketService.connect()
+    } catch (error) {
+      console.error('连接失败:', error)
+      // 如果连接失败，返回大厅
+      emit('back')
+      return
+    }
+  }
+  
+  // 检查房间状态
+  if (!multiplayerStore.currentRoom) {
+    console.warn('⚠️ 未找到房间信息，返回大厅')
+    emit('back')
+    return
+  }
+  
+  console.log('🎮 初始化多人游戏，房间ID:', multiplayerStore.currentRoom.id)
+  
   generateFood()
   initGame()
   
-  // 聚焦画布以接收键盘事件
+  // 设置键盘监听器
+  setupKeyboardListeners()
+  
+  // 聚焦画布以接收键盘事件（备用方案）
   if (gameCanvas.value) {
     gameCanvas.value.focus()
+    console.log('📺 Canvas已获得焦点')
   }
 })
 
 // 组件卸载时清理
 onUnmounted(() => {
   stopGameLoop()
+  removeKeyboardListeners()
+  // 重置准备状态
+  multiplayerStore.resetReady()
 })
+
+// 监听游戏会话状态变化
+watch(
+  () => gameSession.value.status,
+  (newStatus, oldStatus) => {
+    console.log(`游戏状态变化: ${oldStatus} -> ${newStatus}`)
+    
+    if (newStatus === 'playing' && oldStatus !== 'playing') {
+      // 开始游戏
+      console.log('🎮 游戏开始!')
+      waitingForPlayers.value = false // 确保不再等待玩家
+      gameEnded.value = false // 确保游戏未结束标志
+      isPaused.value = false // 确保游戏未暂停
+      startGameLoop()
+    } else if (newStatus === 'countdown') {
+      // 倒计时阶段
+      console.log('⏰ 游戏倒计时中')
+      waitingForPlayers.value = false
+      stopGameLoop() // 倒计时期间停止游戏循环
+    } else if (newStatus === 'waiting') {
+      // 停止游戏
+      console.log('⏳ 等待玩家准备')
+      waitingForPlayers.value = true // 重新等待玩家
+      stopGameLoop()
+    }
+  },
+  { immediate: true }
+)
 </script>
 
 <style scoped>
@@ -652,6 +1004,8 @@ onUnmounted(() => {
   outline: none;
 }
 
+.prepare-overlay,
+.countdown-overlay,
 .waiting-overlay,
 .game-over-overlay {
   backdrop-filter: blur(4px);
@@ -661,6 +1015,37 @@ onUnmounted(() => {
 .controls-info {
   background: rgba(31, 41, 55, 0.9);
   backdrop-filter: blur(8px);
+}
+
+.ready-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.countdown-number {
+  text-shadow: 0 0 20px rgba(255, 255, 255, 0.8);
+  animation: countdown-pulse 1s ease-in-out infinite;
+}
+
+@keyframes countdown-pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+  100% { transform: scale(1); }
+}
+
+.prepare-card {
+  animation: slideInUp 0.5s ease-out;
+}
+
+@keyframes slideInUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .loading-spinner {

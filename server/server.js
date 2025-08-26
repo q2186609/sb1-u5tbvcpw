@@ -9,14 +9,28 @@ const server = createServer(app)
 
 // 配置CORS
 app.use(cors({
-  origin: ["http://localhost:5173", "http://127.0.0.1:5173"],
+  origin: [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://192.168.2.80:5173",
+    /^http:\/\/192\.168\.\d+\.\d+:5173$/,
+    /^http:\/\/10\.\d+\.\d+\.\d+:5173$/,
+    /^http:\/\/172\.(?:1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+:5173$/
+  ],
   credentials: true
 }))
 
 // 配置Socket.io
 const io = new Server(server, {
   cors: {
-    origin: ["http://localhost:5173", "http://127.0.0.1:5173"],
+    origin: [
+      "http://localhost:5173",
+      "http://127.0.0.1:5173",
+      "http://192.168.2.80:5173",
+      /^http:\/\/192\.168\.\d+\.\d+:5173$/,
+      /^http:\/\/10\.\d+\.\d+\.\d+:5173$/,
+      /^http:\/\/172\.(?:1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+:5173$/
+    ],
     methods: ["GET", "POST"],
     credentials: true
   },
@@ -120,8 +134,9 @@ class GameServer {
       minPlayers: roomConfig.minPlayers || 2,
       isPrivate: roomConfig.isPrivate || false,
       password: roomConfig.password || '',
-      status: 'waiting', // waiting, starting, playing, finished
+      status: 'waiting', // waiting, preparing, countdown, starting, playing, finished
       players: [hostSocketId],
+      readyPlayers: [], // 已准备的玩家ID列表
       settings: roomConfig.settings || {},
       createdAt: new Date().toISOString(),
       gameSession: null
@@ -131,6 +146,7 @@ class GameServer {
     host.currentRoom = roomId
 
     console.log(`🏠 房间创建: ${room.name} (${roomId}) by ${host.name}`)
+    console.log(`👤 房主状态: ${host.name} (${host.id}) currentRoom: ${host.currentRoom}`)
     
     // 通知房主
     io.to(hostSocketId).emit('room_created', {
@@ -263,12 +279,166 @@ class GameServer {
       minPlayers: room.minPlayers,
       isPrivate: room.isPrivate,
       status: room.status,
+      readyPlayers: room.readyPlayers || [], // 添加准备玩家列表
       players: room.players.map(socketId => {
         const player = this.players.get(socketId)
         return player ? this.getPublicPlayerInfo(player) : null
       }).filter(Boolean),
       createdAt: room.createdAt
     }
+  }
+  
+  // 准备系统方法
+  setPlayerReady(playerSocketId, ready) {
+    const player = this.players.get(playerSocketId)
+    console.log(`🔍 检查玩家: ${playerSocketId}, 玩家存在: ${!!player}, currentRoom: ${player?.currentRoom}`)
+    
+    if (!player || !player.currentRoom) {
+      const errorMsg = !player ? '玩家不存在' : '玩家未在房间中'
+      console.error(`❌ setPlayerReady 失败: ${errorMsg}, 玩家ID: ${playerSocketId}`)
+      throw new Error('玩家未在房间中')
+    }
+    
+    const room = this.rooms.get(player.currentRoom)
+    console.log(`🏠 检查房间: ${player.currentRoom}, 房间存在: ${!!room}`)
+    
+    if (!room) {
+      console.error(`❌ 房间不存在: ${player.currentRoom}, 玩家: ${player.name} (${playerSocketId})`)
+      console.log('🗺️ 当前所有房间:', Array.from(this.rooms.keys()))
+      throw new Error('房间不存在')
+    }
+    
+    const readyIndex = room.readyPlayers.indexOf(playerSocketId)
+    
+    if (ready && readyIndex === -1) {
+      room.readyPlayers.push(playerSocketId)
+    } else if (!ready && readyIndex !== -1) {
+      room.readyPlayers.splice(readyIndex, 1)
+    }
+    
+    console.log(`🎯 玩家准备状态: ${player.name} - ${ready ? '已准备' : '取消准备'}`)
+    
+    // 通知房间内所有玩家
+    room.players.forEach(socketId => {
+      io.to(socketId).emit('player_ready_changed', {
+        playerId: playerSocketId,
+        playerName: player.name,
+        ready: ready,
+        room: this.getRoomInfo(room)
+      })
+    })
+    
+    // 检查是否所有玩家都已准备
+    if (room.players.length >= room.minPlayers && room.readyPlayers.length === room.players.length) {
+      this.startGameCountdown(room.id)
+    }
+    
+    return room
+  }
+  
+  startGameCountdown(roomId) {
+    const room = this.rooms.get(roomId)
+    if (!room) return
+    
+    room.status = 'countdown'
+    let countdown = 3
+    
+    console.log(`⏰ 房间 ${room.name} 开始倒计时`)
+    
+    // 通知所有玩家开始倒计时
+    room.players.forEach(socketId => {
+      io.to(socketId).emit('game_countdown_start', {
+        countdown: countdown,
+        room: this.getRoomInfo(room)
+      })
+    })
+    
+    const countdownInterval = setInterval(() => {
+      countdown--
+      
+      if (countdown > 0) {
+        // 继续倒计时
+        room.players.forEach(socketId => {
+          io.to(socketId).emit('game_countdown_tick', {
+            countdown: countdown
+          })
+        })
+      } else {
+        // 倒计时结束，开始游戏
+        clearInterval(countdownInterval)
+        this.startGame(roomId)
+      }
+    }, 1000)
+  }
+  
+  startGame(roomId) {
+    const room = this.rooms.get(roomId)
+    if (!room) return
+    
+    room.status = 'playing'
+    
+    console.log(`🎮 房间 ${room.name} 游戏开始`)
+    
+    // 通知所有玩家游戏开始
+    room.players.forEach(socketId => {
+      io.to(socketId).emit('game_started', {
+        room: this.getRoomInfo(room)
+      })
+    })
+    
+    // 更新房间列表
+    this.broadcastRoomList()
+  }
+  
+  forceStartGame(hostSocketId, roomId) {
+    const host = this.players.get(hostSocketId)
+    const room = this.rooms.get(roomId)
+    
+    if (!host || !room) {
+      throw new Error('房间或玩家不存在')
+    }
+    
+    if (room.host !== hostSocketId) {
+      throw new Error('只有房主才能强制开始游戏')
+    }
+    
+    if (room.players.length < room.minPlayers) {
+      throw new Error('玩家数量不足')
+    }
+    
+    console.log(`⚡ 房主 ${host.name} 强制开始游戏`)
+    
+    // 重置准备状态，直接开始倒计时
+    room.readyPlayers = [...room.players]
+    this.startGameCountdown(roomId)
+    
+    return room
+  }
+  
+  // 重置游戏
+  resetGame(roomId) {
+    const room = this.rooms.get(roomId)
+    if (!room) {
+      throw new Error('房间不存在')
+    }
+    
+    // 重置房间状态
+    room.status = 'waiting'
+    room.readyPlayers = []
+    
+    console.log(`🔄 重置游戏: 房间 ${room.name}`)
+    
+    // 通知房间内所有玩家游戏已重置
+    room.players.forEach(socketId => {
+      io.to(socketId).emit('game_reset', {
+        room: this.getRoomInfo(room)
+      })
+    })
+    
+    // 更新房间列表
+    this.broadcastRoomList()
+    
+    return room
   }
 
   // 获取公开房间列表
@@ -508,6 +678,42 @@ io.on('connection', (socket) => {
       io.emit('lobby_chat_message', chatMessage)
     }
   })
+  
+  // 准备系统事件处理
+  socket.on('player_ready', ({ playerId, ready, roomId }) => {
+    try {
+      const room = gameServer.setPlayerReady(socket.id, ready)
+      socket.emit('player_ready_success', {
+        room: gameServer.getRoomInfo(room)
+      })
+    } catch (error) {
+      socket.emit('player_ready_error', { message: error.message })
+    }
+  })
+  
+  // 房主强制开始游戏
+  socket.on('force_start_game', ({ roomId }) => {
+    try {
+      const room = gameServer.forceStartGame(socket.id, roomId)
+      socket.emit('force_start_success', {
+        room: gameServer.getRoomInfo(room)
+      })
+    } catch (error) {
+      socket.emit('force_start_error', { message: error.message })
+    }
+  })
+  
+  // 重置游戏
+  socket.on('reset_game', ({ roomId }) => {
+    try {
+      const room = gameServer.resetGame(roomId)
+      socket.emit('reset_game_success', {
+        room: gameServer.getRoomInfo(room)
+      })
+    } catch (error) {
+      socket.emit('reset_game_error', { message: error.message })
+    }
+  })
 
   // 断开连接
   socket.on('disconnect', () => {
@@ -523,8 +729,10 @@ setInterval(() => {
 
 // 启动服务器
 const PORT = process.env.PORT || 3001
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Snake Game Server running on port ${PORT}`)
-  console.log(`📱 WebSocket endpoint: ws://localhost:${PORT}`)
-  console.log(`🌐 Frontend should connect to: http://localhost:${PORT}`)
+  console.log(`📱 WebSocket endpoint: ws://0.0.0.0:${PORT}`)
+  console.log(`🌐 Local access: http://localhost:${PORT}`)
+  console.log(`🌐 LAN access: http://192.168.2.80:${PORT}`)
+  console.log(`💡 Frontend should connect to: ws://192.168.2.80:${PORT}`)
 })

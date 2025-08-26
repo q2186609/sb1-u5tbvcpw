@@ -207,7 +207,7 @@
               class="message mb-2 last:mb-0"
             >
               <span class="text-blue-400 text-sm font-bold">{{ message.playerName }}:</span>
-              <span class="text-white text-sm ml-1">{{ message.content }}</span>
+              <span class="text-white text-sm ml-1">{{ message.message || message.content }}</span>
             </div>
           </div>
           
@@ -269,12 +269,12 @@ const isConnected = computed(() => multiplayerStore.isConnected)
 const isSearching = computed(() => multiplayerStore.isSearching)
 const matchingProgress = computed(() => multiplayerStore.matchingProgress)
 const estimatedWaitTime = computed(() => multiplayerStore.estimatedWaitTime)
-const roomList = computed(() => socketService.getRoomList())
-const playerId = computed(() => multiplayerStore.localPlayer.id)
-const playerName = computed(() => multiplayerStore.localPlayer.name)
+const roomList = computed(() => multiplayerStore.roomList)
+const playerId = computed(() => multiplayerStore.localPlayer?.id || '')
+const playerName = computed(() => multiplayerStore.localPlayer?.name || '未知玩家')
 const recentMessages = computed(() => multiplayerStore.messages.slice(-10))
 const unreadCount = computed(() => multiplayerStore.unreadCount)
-const onlinePlayers = computed(() => socketService.getOnlinePlayersList())
+const onlinePlayers = computed(() => multiplayerStore.onlinePlayers)
 
 // 游戏模式配置
 const gameModes = ref([
@@ -326,8 +326,8 @@ const cancelMatching = () => {
 }
 
 const refreshRooms = () => {
-  // Mock服务不需要刻意刷新，数据已经存在
-  console.log('🔄 房间列表已刷新')
+  socketService.refreshData()
+  console.log('🔄 正在刷新房间列表和在线玩家...')
 }
 
 const joinRoom = (room) => {
@@ -372,6 +372,8 @@ const sendChatMessage = () => {
   if (chatMessage.value.trim()) {
     socketService.sendChatMessage(chatMessage.value.trim())
     chatMessage.value = ''
+    // 标记消息为已读
+    multiplayerStore.markMessagesAsRead()
   }
 }
 
@@ -415,20 +417,39 @@ const formatRelativeTime = (timestamp) => {
 const emit = defineEmits(['back', 'joinedRoom', 'createdRoom'])
 
 // 生命周期
+let refreshInterval = null
+
 onMounted(async () => {
   // 连接到服务器
   try {
     await socketService.connect()
     console.log('🎮 连接到多人游戏服务器成功')
+    
+    // 初始化数据
+    socketService.refreshData()
+    
+    // 设置定期刷新（每30秒）
+    refreshInterval = setInterval(() => {
+      if (socketService.isConnected) {
+        socketService.refreshData()
+      }
+    }, 30000)
+    
   } catch (error) {
     console.error('连接服务器失败:', error)
   }
 })
 
 onUnmounted(() => {
-  if (socketService.isConnected) {
-    socketService.disconnect()
+  // 清理定时器
+  if (refreshInterval) {
+    clearInterval(refreshInterval)
   }
+  
+  // 不要在这里断开Socket连接，因为多人游戏组件也需要用到
+  // if (socketService.isConnected) {
+  //   socketService.disconnect()
+  // }
 })
 </script>
 

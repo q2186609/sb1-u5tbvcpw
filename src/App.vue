@@ -150,7 +150,8 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { socketService } from './services/socketService.js'
 
 // 导入组件
 import SinglePlayerGame from './components/SinglePlayerGame.vue'
@@ -212,6 +213,13 @@ const showNotification = (message, type = 'info') => {
 // 生命周期
 onMounted(() => {
   console.log('Vue Snake Game 初始化完成')
+})
+
+// 在应用关闭时清理Socket连接
+onUnmounted(() => {
+  if (socketService.isConnected) {
+    socketService.disconnect()
+  }
 })
 </script>
 

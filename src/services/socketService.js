@@ -14,8 +14,33 @@ class SocketService {
     this.connectionPromise = null
   }
 
+  // 获取服务器URL
+  getServerUrl() {
+    // 如果是生产环境或者有特定配置，使用配置的URL
+    if (import.meta.env.VITE_SOCKET_URL) {
+      return import.meta.env.VITE_SOCKET_URL
+    }
+    
+    // 自动检测当前域名
+    const hostname = window.location.hostname
+    const port = 3001 // Socket服务器端口
+    
+    // 如果是localhost，使用localhost
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+      return `http://localhost:${port}`
+    }
+    
+    // 否则使用当前域名
+    return `http://${hostname}:${port}`
+  }
+
   // 连接到服务器
-  async connect(serverUrl = 'http://localhost:3001') {
+  async connect(serverUrl = null) {
+    // 如果没有指定URL，自动获取
+    if (!serverUrl) {
+      serverUrl = this.getServerUrl()
+    }
+    
     if (this.socket && this.socket.connected) {
       return Promise.resolve(this.socket)
     }
@@ -108,7 +133,14 @@ class SocketService {
       if (data.rooms) {
         multiplayerStore.roomList = data.rooms
       }
+      if (data.onlinePlayers) {
+        multiplayerStore.onlinePlayers = data.onlinePlayers
+      }
       console.log('👤 玩家初始化完成:', data.player)
+      
+      // 主动请求最新数据
+      this.socket.emit('get_room_list')
+      this.socket.emit('get_online_players')
     })
 
     // 房间相关事件
@@ -118,6 +150,13 @@ class SocketService {
       multiplayerStore.currentRoom = data.room
       multiplayerStore.isInRoom = true
       multiplayerStore.isHost = true
+      
+      // 重置游戏会话状态
+      multiplayerStore.gameSession.status = 'waiting'
+      multiplayerStore.gameSession.readyPlayers = data.room.readyPlayers || []
+      
+      // 更新房间列表
+      this.socket.emit('get_room_list')
     })
 
     this.socket.on('room_create_success', (data) => {
@@ -126,6 +165,13 @@ class SocketService {
       multiplayerStore.currentRoom = data.room
       multiplayerStore.isInRoom = true
       multiplayerStore.isHost = true
+      
+      // 重置游戏会话状态
+      multiplayerStore.gameSession.status = 'waiting'
+      multiplayerStore.gameSession.readyPlayers = data.room.readyPlayers || []
+      
+      // 更新房间列表
+      this.socket.emit('get_room_list')
     })
 
     this.socket.on('room_create_error', (data) => {
@@ -222,30 +268,168 @@ class SocketService {
     this.socket.on('room_list_updated', (data) => {
       const multiplayerStore = useMultiplayerStore()
       multiplayerStore.roomList = data.rooms
+      console.log('🏠 房间列表更新:', data.rooms.length)
     })
 
     this.socket.on('room_list', (data) => {
       const multiplayerStore = useMultiplayerStore()
       multiplayerStore.roomList = data.rooms
+      console.log('🏠 获取房间列表:', data.rooms.length)
     })
 
     // 在线玩家更新
     this.socket.on('online_players', (data) => {
       const multiplayerStore = useMultiplayerStore()
       multiplayerStore.onlinePlayers = data.players
+      console.log('👥 在线玩家更新:', data.players.length)
+    })
+    
+    // 玩家上线
+    this.socket.on('player_online', (data) => {
+      const multiplayerStore = useMultiplayerStore()
+      const existingIndex = multiplayerStore.onlinePlayers.findIndex(p => p.id === data.player.id)
+      if (existingIndex === -1) {
+        multiplayerStore.onlinePlayers.push(data.player)
+      }
+      console.log('👤 玩家上线:', data.player.name)
+    })
+    
+    // 玩家下线
+    this.socket.on('player_offline', (data) => {
+      const multiplayerStore = useMultiplayerStore()
+      multiplayerStore.onlinePlayers = multiplayerStore.onlinePlayers.filter(p => p.id !== data.playerId)
+      console.log('👤 玩家下线:', data.playerId)
     })
 
     // 聊天消息
     this.socket.on('chat_message', (data) => {
       console.log('💬 收到聊天消息:', data)
       const multiplayerStore = useMultiplayerStore()
-      multiplayerStore.messages.push(data)
+      // 统一消息格式
+      const message = {
+        id: data.id || Date.now().toString(),
+        playerId: data.playerId,
+        playerName: data.playerName,
+        message: data.message,
+        content: data.message, // 兼容字段
+        timestamp: data.timestamp,
+        type: data.type || 'text'
+      }
+      multiplayerStore.messages.push(message)
+      
+      // 增加未读数
+      if (data.playerId !== multiplayerStore.localPlayer?.id) {
+        multiplayerStore.unreadCount++
+      }
     })
 
     this.socket.on('lobby_chat_message', (data) => {
       console.log('💬 收到大厅消息:', data)
       const multiplayerStore = useMultiplayerStore()
-      multiplayerStore.messages.push(data)
+      // 统一消息格式
+      const message = {
+        id: data.id || Date.now().toString(),
+        playerId: data.playerId,
+        playerName: data.playerName,
+        message: data.message,
+        content: data.message, // 兼容字段
+        timestamp: data.timestamp,
+        type: data.type || 'text'
+      }
+      multiplayerStore.messages.push(message)
+      
+      // 增加未读数
+      if (data.playerId !== multiplayerStore.localPlayer?.id) {
+        multiplayerStore.unreadCount++
+      }
+    })
+
+    // 准备系统事件处理
+    this.socket.on('player_ready_changed', (data) => {
+      console.log('🎯 玩家准备状态变化:', data)
+      const multiplayerStore = useMultiplayerStore()
+      
+      // 更新房间状态
+      if (data.room) {
+        multiplayerStore.currentRoom = data.room
+        
+        // 更新准备状态
+        if (multiplayerStore.gameSession) {
+          multiplayerStore.gameSession.readyPlayers = data.room.readyPlayers || []
+        }
+      }
+    })
+    
+    this.socket.on('game_countdown_start', (data) => {
+      console.log('⏰ 游戏倒计时开始:', data)
+      const multiplayerStore = useMultiplayerStore()
+      
+      if (multiplayerStore.gameSession) {
+        multiplayerStore.gameSession.status = 'countdown'
+        multiplayerStore.gameSession.countdownValue = data.countdown
+      }
+    })
+    
+    this.socket.on('game_countdown_tick', (data) => {
+      console.log('⏰ 倒计时:', data.countdown)
+      const multiplayerStore = useMultiplayerStore()
+      
+      if (multiplayerStore.gameSession) {
+        multiplayerStore.gameSession.countdownValue = data.countdown
+      }
+    })
+    
+    this.socket.on('game_started', (data) => {
+      console.log('🎮 游戏开始:', data)
+      const multiplayerStore = useMultiplayerStore()
+      
+      if (multiplayerStore.gameSession) {
+        multiplayerStore.gameSession.status = 'playing'
+        multiplayerStore.gameSession.startTime = Date.now()
+        multiplayerStore.gameSession.countdownValue = 0
+      }
+    })
+    
+    this.socket.on('player_ready_success', (data) => {
+      console.log('✅ 准备状态更新成功:', data)
+    })
+    
+    this.socket.on('player_ready_error', (data) => {
+      console.error('❌ 准备状态更新失败:', data.message)
+      alert(`准备失败: ${data.message}`)
+    })
+    
+    this.socket.on('force_start_success', (data) => {
+      console.log('⚡ 强制开始成功:', data)
+    })
+    
+    this.socket.on('force_start_error', (data) => {
+      console.error('❌ 强制开始失败:', data.message)
+      alert(`强制开始失败: ${data.message}`)
+    })
+    
+    // 重置游戏事件处理
+    this.socket.on('game_reset', (data) => {
+      console.log('🔄 游戏已重置:', data)
+      const multiplayerStore = useMultiplayerStore()
+      
+      // 更新房间信息
+      if (data.room) {
+        multiplayerStore.currentRoom = data.room
+      }
+      
+      // 重置准备状态
+      multiplayerStore.resetReady()
+      multiplayerStore.gameSession.status = 'waiting'
+    })
+    
+    this.socket.on('reset_game_success', (data) => {
+      console.log('✅ 游戏重置成功:', data)
+    })
+    
+    this.socket.on('reset_game_error', (data) => {
+      console.error('❌ 游戏重置失败:', data.message)
+      alert(`游戏重置失败: ${data.message}`)
     })
 
     // 错误处理
@@ -324,6 +508,14 @@ class SocketService {
     
     const multiplayerStore = useMultiplayerStore()
     return multiplayerStore.onlinePlayers || []
+  }
+  
+  // 刷新数据
+  refreshData() {
+    if (this.socket && this.socket.connected) {
+      this.socket.emit('get_room_list')
+      this.socket.emit('get_online_players')
+    }
   }
 
   // 创建房间
