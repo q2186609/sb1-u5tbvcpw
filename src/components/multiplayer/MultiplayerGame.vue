@@ -362,79 +362,26 @@ const generateFood = () => {
   ]
 }
 
-// 更新游戏状态
-const updateGame = () => {
-  // 只在游戏结束或暂停时停止更新，不检查waitingForPlayers
-  if (gameEnded.value || isPaused.value) {
-    if (gameEnded.value) console.log('🚫 游戏已结束，停止更新')
-    if (isPaused.value) console.log('⏸️ 游戏已暂停，停止更新')
-    return
-  }
+// 接收服务器游戏状态更新
+const handleGameStateUpdate = (gameState) => {
+  console.log('📥 接收服务器游戏状态更新:', gameState.tick)
   
-  // 只有在playing状态下才更新游戏
-  if (gameSession.value.status !== 'playing') {
-    return
-  }
-
-  players.value.forEach((player, playerIndex) => {
-    if (!player.alive) return
-
-    // 只为当前玩家显示调试信息，且仅在方向改变时
-    const isCurrentPlayer = player.id === playerId.value
-    const oldDirection = { ...player.direction }
-
-    // 移动蛇头
-    const head = { ...player.snake[0] }
-    const oldX = head.x
-    const oldY = head.y
-    head.x += player.direction.x
-    head.y += player.direction.y
-
-    // 只在第一次移动或方向改变时输出调试信息
-    if (isCurrentPlayer && (Math.abs(head.x - oldX) > 0 || Math.abs(head.y - oldY) > 0)) {
-      // 只在移动时输出一次调试信息
-      if (!player._lastLoggedPosition || player._lastLoggedPosition.x !== head.x || player._lastLoggedPosition.y !== head.y) {
-        console.log(`🐍 玩家 ${player.name} 移动: (${oldX},${oldY}) -> (${head.x},${head.y}), 方向:`, player.direction)
-        player._lastLoggedPosition = { x: head.x, y: head.y }
-      }
-    }
-
-    // 检查边界碰撞
-    if (head.x < 0 || head.x >= canvasWidth / gridSize || 
-        head.y < 0 || head.y >= canvasHeight / gridSize) {
-      player.alive = false
-      console.log(`💥 玩家 ${player.name} 撞墙死亡: (${head.x},${head.y})`)
-      return
-    }
-
-    // 检查与其他蛇的碰撞
-    const allSnakeSegments = players.value.flatMap(p => p.snake)
-    if (allSnakeSegments.some(segment => segment.x === head.x && segment.y === head.y)) {
-      player.alive = false
-      console.log(`💥 玩家 ${player.name} 撞蛇死亡: (${head.x},${head.y})`)
-      return
-    }
-
-    player.snake.unshift(head)
-
-    // 检查是否吃到食物
-    const eatenFood = food.value.find(f => f.x === head.x && f.y === head.y)
-    if (eatenFood) {
-      player.score += eatenFood.type === 'bonus' ? 20 : 10
-      console.log(`🍎 玩家 ${player.name} 吃到食物，得分: ${player.score}`)
-      // 移除被吃的食物
-      food.value = food.value.filter(f => f !== eatenFood)
-      // 生成新食物
-      generateFood()
-    } else {
-      player.snake.pop()
+  // 更新玩家状态
+  players.value = gameState.players.map(serverPlayer => {
+    const existingPlayer = players.value.find(p => p.id === serverPlayer.id)
+    return {
+      ...serverPlayer,
+      color: existingPlayer?.color || serverPlayer.color
     }
   })
-
+  
+  // 更新食物
+  food.value = gameState.food
+  
   // 检查游戏是否结束
-  const alivePlayers = players.value.filter(p => p.alive)
-  if (alivePlayers.length <= 1) {
-    endGame()
+  const alivePlayers = gameState.players.filter(p => p.alive)
+  if (alivePlayers.length <= 1 && gameSession.value.status === 'playing') {
+    // 等待服务器的游戏结束通知
   }
 }
 
@@ -722,33 +669,31 @@ const darkenColor = (color, percent) => {
   return '#' + (0x1000000 + (R << 16) + (G << 8) + B).toString(16).slice(1)
 }
 
-// 游戏主循环
-const gameStep = () => {
-  // console.log('🔄 游戏循环步骤执行') // 清除过多的调试输出
-  updateGame()
+// 渲染循环（仅负责渲染）
+const renderStep = () => {
   renderGame()
 }
 
-// 开始游戏循环
-const startGameLoop = () => {
+// 开始渲染循环
+const startRenderLoop = () => {
   if (gameLoop) clearInterval(gameLoop)
-  gameLoop = setInterval(gameStep, 150)
-  console.log('✅ 游戏循环已启动，间隔: 150ms')
+  gameLoop = setInterval(renderStep, 50) // 更高的渲染频率
+  console.log('✅ 渲染循环已启动，间隔: 50ms')
 }
 
-// 停止游戏循环
-const stopGameLoop = () => {
+// 停止渲染循环
+const stopRenderLoop = () => {
   if (gameLoop) {
     clearInterval(gameLoop)
     gameLoop = null
   }
 }
 
-// 结束游戏
+// 结束游戏（由服务器触发）
 const endGame = () => {
   console.log('💯 游戏结束，显示游戏结束界面')
   gameEnded.value = true
-  stopGameLoop()
+  stopRenderLoop()
   
   // 设置游戏会话状态为结束
   multiplayerStore.gameSession.status = 'finished'
@@ -827,54 +772,20 @@ const handleKeyDown = (event) => {
   }
   
   const key = event.key
-  const currentPlayer = players.value.find(p => p.id === playerId.value)
-  
-  console.log('🔍 查找玩家:', {
-    searchingForId: playerId.value,
-    foundPlayer: !!currentPlayer,
-    playerName: currentPlayer?.name,
-    playersInGame: players.value.map(p => ({ id: p.id, name: p.name }))
-  })
-  
-  if (!currentPlayer) {
-    console.warn('⚠️ 未找到当前玩家！')
-    return
-  }
-  
-  if (!currentPlayer.alive) {
-    console.log('💀 玩家已死亡，无法控制')
-    return
-  }
-  
-  console.log('📊 当前玩家方向:', currentPlayer.direction)
-  
-  let directionChanged = false
   let newDirection = null
   
   switch (key) {
     case 'ArrowUp':
-      if (currentPlayer.direction.y !== 1) {
-        newDirection = { x: 0, y: -1 }
-        directionChanged = true
-      }
+      newDirection = { x: 0, y: -1 }
       break
     case 'ArrowDown':
-      if (currentPlayer.direction.y !== -1) {
-        newDirection = { x: 0, y: 1 }
-        directionChanged = true
-      }
+      newDirection = { x: 0, y: 1 }
       break
     case 'ArrowLeft':
-      if (currentPlayer.direction.x !== 1) {
-        newDirection = { x: -1, y: 0 }
-        directionChanged = true
-      }
+      newDirection = { x: -1, y: 0 }
       break
     case 'ArrowRight':
-      if (currentPlayer.direction.x !== -1) {
-        newDirection = { x: 1, y: 0 }
-        directionChanged = true
-      }
+      newDirection = { x: 1, y: 0 }
       break
     case ' ':
       isPaused.value = !isPaused.value
@@ -882,14 +793,14 @@ const handleKeyDown = (event) => {
       break
   }
   
-  if (directionChanged && newDirection) {
-    console.log('🔄 尝试改变方向:', currentPlayer.direction, '->', newDirection)
-    currentPlayer.direction = newDirection
-    console.log('✅ 方向已更新:', currentPlayer.direction)
-    
-    // 验证方向是否真的改变了
-    const verifyDirection = players.value.find(p => p.id === playerId.value)?.direction
-    console.log('🔍 验证方向更新:', verifyDirection)
+  // 发送方向改变到服务器
+  if (newDirection && socketService.isConnected) {
+    console.log('📡 发送方向改变到服务器:', newDirection)
+    socketService.socket.emit('player_action', {
+      type: 'direction_change',
+      direction: newDirection,
+      timestamp: Date.now()
+    })
   }
   
   event.preventDefault()
@@ -951,6 +862,9 @@ onMounted(async () => {
   // 设置键盘监听器
   setupKeyboardListeners()
   
+  // 设置Socket事件监听
+  setupSocketListeners()
+  
   // 聚焦画布以接收键盘事件（备用方案）
   if (gameCanvas.value) {
     gameCanvas.value.focus()
@@ -958,10 +872,41 @@ onMounted(async () => {
   }
 })
 
+// 设置Socket事件监听
+const setupSocketListeners = () => {
+  if (!socketService.socket) return
+  
+  // 监听服务器游戏状态更新
+  socketService.socket.on('game_state_update', handleGameStateUpdate)
+  
+  // 监听游戏结束事件
+  socketService.socket.on('game_ended', (result) => {
+    console.log('🏁 收到游戏结束通知:', result)
+    gameEnded.value = true
+    stopRenderLoop()
+    
+    // 更新最终排名
+    players.value = result.players
+  })
+  
+  console.log('📡 Socket事件监听器已设置')
+}
+
+// 移除Socket事件监听
+const removeSocketListeners = () => {
+  if (!socketService.socket) return
+  
+  socketService.socket.off('game_state_update', handleGameStateUpdate)
+  socketService.socket.off('game_ended')
+  
+  console.log('📡 Socket事件监听器已移除')
+}
+
 // 组件卸载时清理
 onUnmounted(() => {
-  stopGameLoop()
+  stopRenderLoop()
   removeKeyboardListeners()
+  removeSocketListeners()
   // 重置准备状态
   multiplayerStore.resetReady()
 })
@@ -978,17 +923,17 @@ watch(
       waitingForPlayers.value = false // 确保不再等待玩家
       gameEnded.value = false // 确保游戏未结束标志
       isPaused.value = false // 确保游戏未暂停
-      startGameLoop()
+      startRenderLoop() // 启动渲染循环
     } else if (newStatus === 'countdown') {
       // 倒计时阶段
       console.log('⏰ 游戏倒计时中')
       waitingForPlayers.value = false
-      stopGameLoop() // 倒计时期间停止游戏循环
+      stopRenderLoop() // 倒计时期间停止渲染循环
     } else if (newStatus === 'waiting') {
       // 停止游戏
       console.log('⏳ 等待玩家准备')
       waitingForPlayers.value = true // 重新等待玩家
-      stopGameLoop()
+      stopRenderLoop()
     }
   },
   { immediate: true }

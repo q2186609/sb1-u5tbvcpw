@@ -377,17 +377,264 @@ class GameServer {
     
     room.status = 'playing'
     
-    console.log(`🎮 房间 ${room.name} 游戏开始`)
+    // 初始化游戏会话
+    const gameSession = this.initializeGameSession(room)
+    room.gameSession = gameSession
+    this.gameSessions.set(roomId, gameSession)
+    
+    console.log(`🎮 房间 ${room.name} 游戏开始，初始化游戏会话`)
     
     // 通知所有玩家游戏开始
     room.players.forEach(socketId => {
       io.to(socketId).emit('game_started', {
-        room: this.getRoomInfo(room)
+        room: this.getRoomInfo(room),
+        gameSession: gameSession
       })
     })
     
+    // 启动游戏循环
+    this.startGameLoop(roomId)
+    
     // 更新房间列表
     this.broadcastRoomList()
+  }
+  
+  // 初始化游戏会话
+  initializeGameSession(room) {
+    const canvasWidth = 800
+    const canvasHeight = 600
+    const gridSize = 20
+    
+    const gameSession = {
+      id: room.id,
+      status: 'playing',
+      startTime: Date.now(),
+      tick: 0,
+      players: room.players.map((socketId, index) => {
+        const player = this.players.get(socketId)
+        return {
+          id: socketId,
+          name: player.name,
+          color: this.getPlayerColor(index),
+          score: 0,
+          snake: [{ 
+            x: 10 + index * 10, 
+            y: 10 + index * 5 
+          }],
+          direction: { x: 1, y: 0 },
+          nextDirection: { x: 1, y: 0 }, // 缓存下一个方向
+          alive: true,
+          lastUpdate: Date.now()
+        }
+      }),
+      food: this.generateFood(canvasWidth, canvasHeight, gridSize),
+      canvasWidth,
+      canvasHeight,
+      gridSize
+    }
+    
+    return gameSession
+  }
+  
+  // 获取玩家颜色
+  getPlayerColor(index) {
+    const colors = ['#10B981', '#3B82F6', '#F59E0B', '#EF4444', '#8B5CF6', '#F97316']
+    return colors[index % colors.length]
+  }
+  
+  // 生成食物（初始化时使用，生成两个不同类型的食物）
+  generateFood(canvasWidth, canvasHeight, gridSize) {
+    const maxX = Math.floor(canvasWidth / gridSize) - 1
+    const maxY = Math.floor(canvasHeight / gridSize) - 1
+    
+    return [
+      {
+        x: Math.floor(Math.random() * maxX),
+        y: Math.floor(Math.random() * maxY),
+        type: 'normal'
+      },
+      {
+        x: Math.floor(Math.random() * maxX),
+        y: Math.floor(Math.random() * maxY),
+        type: 'bonus'
+      }
+    ]
+  }
+  
+  // 生成单个食物（吃掉食物后补充使用）
+  generateSingleFood(canvasWidth, canvasHeight, gridSize, foodType) {
+    const maxX = Math.floor(canvasWidth / gridSize) - 1
+    const maxY = Math.floor(canvasHeight / gridSize) - 1
+    
+    return {
+      x: Math.floor(Math.random() * maxX),
+      y: Math.floor(Math.random() * maxY),
+      type: foodType
+    }
+  }
+  
+  // 启动游戏循环
+  startGameLoop(roomId) {
+    const gameSession = this.gameSessions.get(roomId)
+    if (!gameSession) return
+    
+    console.log(`🔄 启动房间 ${roomId} 的游戏循环`)
+    
+    const gameLoop = setInterval(() => {
+      try {
+        this.updateGameState(roomId)
+        this.broadcastGameState(roomId)
+      } catch (error) {
+        console.error('游戏循环错误:', error)
+        clearInterval(gameLoop)
+      }
+    }, 150) // 与客户端同步的间隔
+    
+    gameSession.gameLoop = gameLoop
+  }
+  
+  // 更新游戏状态
+  updateGameState(roomId) {
+    const gameSession = this.gameSessions.get(roomId)
+    const room = this.rooms.get(roomId)
+    
+    if (!gameSession || !room || room.status !== 'playing') {
+      return
+    }
+    
+    gameSession.tick++
+    
+    // 更新所有玩家
+    gameSession.players.forEach(player => {
+      if (!player.alive) return
+      
+      // 应用缓存的方向
+      player.direction = { ...player.nextDirection }
+      
+      // 移动蛇头
+      const head = { ...player.snake[0] }
+      head.x += player.direction.x
+      head.y += player.direction.y
+      
+      // 检查边界碰撞
+      if (head.x < 0 || head.x >= gameSession.canvasWidth / gameSession.gridSize ||
+          head.y < 0 || head.y >= gameSession.canvasHeight / gameSession.gridSize) {
+        player.alive = false
+        console.log(`💥 玩家 ${player.name} 撞墙死亡: (${head.x},${head.y})`)
+        return
+      }
+      
+      // 检查与其他蛇的碰撞
+      const allSnakeSegments = gameSession.players.flatMap(p => p.snake)
+      if (allSnakeSegments.some(segment => segment.x === head.x && segment.y === head.y)) {
+        player.alive = false
+        console.log(`💥 玩家 ${player.name} 撞蛇死亡: (${head.x},${head.y})`)
+        return
+      }
+      
+      player.snake.unshift(head)
+      
+      // 检查是否吃到食物
+      const eatenFoodIndex = gameSession.food.findIndex(f => f.x === head.x && f.y === head.y)
+      if (eatenFoodIndex !== -1) {
+        const eatenFood = gameSession.food[eatenFoodIndex]
+        player.score += eatenFood.type === 'bonus' ? 20 : 10
+        console.log(`🍎 玩家 ${player.name} 吃到食物，得分: ${player.score}`)
+        
+        // 移除被吃的食物
+        gameSession.food.splice(eatenFoodIndex, 1)
+        
+        // 生成一个相同类型的新食物
+        const newFood = this.generateSingleFood(gameSession.canvasWidth, gameSession.canvasHeight, gameSession.gridSize, eatenFood.type)
+        gameSession.food.push(newFood)
+      } else {
+        player.snake.pop()
+      }
+    })
+    
+    // 检查游戏是否结束
+    const alivePlayers = gameSession.players.filter(p => p.alive)
+    if (alivePlayers.length <= 1) {
+      this.endGame(roomId, alivePlayers[0] || null)
+    }
+  }
+  
+  // 广播游戏状态
+  broadcastGameState(roomId) {
+    const gameSession = this.gameSessions.get(roomId)
+    const room = this.rooms.get(roomId)
+    
+    if (!gameSession || !room) return
+    
+    const gameState = {
+      tick: gameSession.tick,
+      players: gameSession.players,
+      food: gameSession.food,
+      timestamp: Date.now()
+    }
+    
+    // 向房间内所有玩家广播游戏状态
+    room.players.forEach(socketId => {
+      io.to(socketId).emit('game_state_update', gameState)
+    })
+  }
+  
+  // 处理玩家动作
+  handlePlayerAction(socketId, action) {
+    const player = this.players.get(socketId)
+    if (!player || !player.currentRoom) return
+    
+    const gameSession = this.gameSessions.get(player.currentRoom)
+    if (!gameSession) return
+    
+    const gamePlayer = gameSession.players.find(p => p.id === socketId)
+    if (!gamePlayer || !gamePlayer.alive) return
+    
+    // 验证方向改变是否有效（不能反向）
+    const newDirection = action.direction
+    const currentDirection = gamePlayer.direction
+    
+    // 检查是否是有效的方向改变
+    if ((newDirection.x !== 0 && currentDirection.x !== -newDirection.x) ||
+        (newDirection.y !== 0 && currentDirection.y !== -newDirection.y)) {
+      gamePlayer.nextDirection = newDirection
+      console.log(`🎮 玩家 ${gamePlayer.name} 方向改变:`, newDirection)
+    }
+  }
+  
+  // 结束游戏
+  endGame(roomId, winner) {
+    const gameSession = this.gameSessions.get(roomId)
+    const room = this.rooms.get(roomId)
+    
+    if (!gameSession || !room) return
+    
+    console.log(`🏁 房间 ${room.name} 游戏结束`)
+    
+    // 停止游戏循环
+    if (gameSession.gameLoop) {
+      clearInterval(gameSession.gameLoop)
+      gameSession.gameLoop = null
+    }
+    
+    gameSession.status = 'finished'
+    gameSession.endTime = Date.now()
+    room.status = 'finished'
+    
+    // 计算最终结果
+    const finalResults = {
+      winner: winner,
+      players: gameSession.players.sort((a, b) => b.score - a.score),
+      gameTime: gameSession.endTime - gameSession.startTime
+    }
+    
+    // 通知所有玩家游戏结束
+    room.players.forEach(socketId => {
+      io.to(socketId).emit('game_ended', finalResults)
+    })
+    
+    // 清理游戏会话
+    this.gameSessions.delete(roomId)
   }
   
   forceStartGame(hostSocketId, roomId) {
@@ -712,6 +959,15 @@ io.on('connection', (socket) => {
       })
     } catch (error) {
       socket.emit('reset_game_error', { message: error.message })
+    }
+  })
+  
+  // 处理玩家游戏动作
+  socket.on('player_action', (actionData) => {
+    try {
+      gameServer.handlePlayerAction(socket.id, actionData)
+    } catch (error) {
+      console.error('处理玩家动作失败:', error)
     }
   })
 
